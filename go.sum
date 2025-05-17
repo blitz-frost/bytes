@@ -1,0 +1,4 @@
+github.com/blitz-frost/io v0.2.0/go.mod h1:jPkgICs4dSfC2tI1qBNGj3QEzDA0i5+uAq2YXiGBK6k=
+github.com/blitz-frost/msg v0.1.0/go.mod h1:o0bR3SgQCCzdL+fPwWTAizU27QS0L2Ome0hptRGu1Zs=
+github.com/blitz-frost/msg v0.1.1 h1:C9fGUhBeW7BcJMBhMirWNom09QX6cwpEf0LIW7/vibI=
+github.com/blitz-frost/msg v0.1.1/go.mod h1:uQy8Tigo19XA/i/GeXC3+NtTFUzD08mdagIezoN44ec=
