@@ -1,30 +1,33 @@
 package bytes
 
 import (
-	"io"
 	"unsafe"
 
+	"github.com/blitz-frost/errors"
+	"github.com/blitz-frost/io"
 	"github.com/blitz-frost/io/msg"
 )
 
 // A Reader attaches a simple io.Reader interface to a byte slice.
 type Reader []byte
 
-func (x *Reader) Read(b []byte) (int, error) {
+func (x *Reader) Read(b []byte) *io.Error {
 	n := copy(b, *x)
 
-	var err error
+	var err *io.Error
 	if n < len(b) {
-		err = io.EOF
+		err = &io.Error{n, io.EOF}
 	}
 	*x = (*x)[n:]
 
-	return n, err
+	return err
 }
 
 func (x *Reader) WriteTo(w msg.Writer) (int64, error) {
-	n, err := w(*x)
-	return int64(n), err
+	if err := w(*x); err != nil {
+		return int64(err.N), err.Err
+	}
+	return int64(len(*x)), nil
 }
 
 // A Writer attaches a simple io.Writer interface to a byte slice.
@@ -32,25 +35,31 @@ func (x *Reader) WriteTo(w msg.Writer) (int64, error) {
 type Writer []byte
 
 func (x *Writer) ReadFrom(r msg.Reader) (int64, error) {
-	n, err := r(*x)
-	*x = (*x)[n:]
-	if err == io.EOF {
-		err = nil
-	}
-
-	return int64(n), err
-}
-
-func (x *Writer) Write(b []byte) (int, error) {
-	n := copy(*x, b)
+	var o int64
 
 	var err error
+	if ioErr := r(*x); ioErr != nil {
+		o = int64(ioErr.N)
+		err = ioErr
+	} else {
+		o = int64(len(*x))
+	}
+
+	*x = (*x)[o:]
+
+	return o, err
+}
+
+func (x *Writer) Write(b []byte) *io.Error {
+	n := copy(*x, b)
+
+	var err *io.Error
 	if n < len(b) {
-		err = io.ErrShortWrite
+		err = &io.Error{n, errors.Simple("buffer overflow")}
 	}
 	*x = (*x)[n:]
 
-	return n, err
+	return err
 }
 
 const messageReserve = 8 // always reserve space for a uint64 value at the beginning of a message
@@ -106,17 +115,17 @@ func (x *MessageReader) Close() error {
 	return nil
 }
 
-func (x *MessageReader) Read(b []byte) (int, error) {
+func (x *MessageReader) Read(b []byte) *io.Error {
 	if x.err != nil {
-		return 0, x.err
+		return &io.Error{0, x.err}
 	}
 	if len(x.b) == 0 {
 		// no current message
 		if x.eof {
-			return 0, io.EOF
+			return &io.Error{0, io.EOF}
 		}
 		if x.err = x.next(); x.err != nil {
-			return 0, x.err
+			return &io.Error{0, x.err}
 		}
 	}
 
@@ -129,15 +138,15 @@ func (x *MessageReader) Read(b []byte) (int, error) {
 		o += n
 		x.err = x.msg.Close()
 		if x.eof {
-			return o, io.EOF
+			return &io.Error{o, io.EOF}
 		}
 		if x.err != nil {
-			return o, x.err
+			return &io.Error{o, x.err}
 		}
 
 		// get next message
 		if x.err = x.next(); x.err != nil {
-			return o, x.err
+			return &io.Error{o, x.err}
 		}
 
 		// update
@@ -151,7 +160,7 @@ func (x *MessageReader) Read(b []byte) (int, error) {
 		x.err = x.msg.Close()
 	}
 
-	return o, nil
+	return nil
 }
 
 // WriteTo writes the rest of the message to w. Does not close the MessageReader.
@@ -177,13 +186,15 @@ func (x *MessageReader) WriteTo(w msg.Writer) (int64, error) {
 
 	var o int64
 	for {
-		n, err := w(x.b)
-		o += int64(n)
-		x.b = x.b[n:]
-		if err != nil {
+		if err := w(x.b); err != nil {
 			// not an own error, so we don't keep it
-			return o, err
+			x.b = x.b[err.N:]
+			o += int64(err.N)
+			return o, err.Err
 		}
+
+		o += int64(len(x.b))
+		x.b = x.b[len(x.b):]
 
 		x.err = x.msg.Close()
 		if x.eof {
@@ -203,8 +214,6 @@ func (x *MessageReader) WriteTo(w msg.Writer) (int64, error) {
 			return o, nil
 		}
 	}
-
-	return 0, nil
 }
 
 func (x *MessageReader) copy(b []byte) int {
@@ -255,7 +264,9 @@ func (x *MessageWriter) Close() error {
 	return x.send()
 }
 
-// ReadFrom reads from r until EOF. Does not close the MessageWriter.
+// ReadFrom reads from r until EOF.
+//
+// Does not close the MessageWriter.
 func (x *MessageWriter) ReadFrom(r msg.Reader) (int64, error) {
 	if len(x.b) == 0 {
 		if err := x.next(); err != nil {
@@ -265,23 +276,26 @@ func (x *MessageWriter) ReadFrom(r msg.Reader) (int64, error) {
 
 	var o int64
 	for {
-		n, err := r(x.b)
-		o += int64(n)
-		x.b = x.b[n:]
+		err := r(x.b)
 		if err != nil {
-			if err == io.EOF {
+			o += int64(err.N)
+			x.b = x.b[err.N:]
+			if err.Err == io.EOF {
 				// reading to EOF is the normal end
 				break
 			} else {
-				return o, err
+				return o, err.Err
 			}
 		}
 
-		if err = x.send(); err != nil {
+		o += int64(len(x.b))
+		x.b = x.b[len(x.b):]
+
+		if err := x.send(); err != nil {
 			return o, err
 		}
 
-		if err = x.next(); err != nil {
+		if err := x.next(); err != nil {
 			return o, err
 		}
 	}
@@ -294,11 +308,11 @@ func (x *MessageWriter) ReadFrom(r msg.Reader) (int64, error) {
 	return o, err
 }
 
-func (x *MessageWriter) Write(b []byte) (int, error) {
+func (x *MessageWriter) Write(b []byte) *io.Error {
 	if len(x.b) == 0 {
 		// no current message
 		if err := x.next(); err != nil {
-			return 0, err
+			return &io.Error{0, err}
 		}
 	}
 
@@ -311,13 +325,13 @@ func (x *MessageWriter) Write(b []byte) (int, error) {
 
 		// send full message
 		if err := x.send(); err != nil {
-			return o, err
+			return &io.Error{o, err}
 		}
 		o += n
 
 		// load next message
 		if err := x.next(); err != nil {
-			return o, err
+			return &io.Error{o, err}
 		}
 
 		// update
@@ -331,12 +345,11 @@ func (x *MessageWriter) Write(b []byte) (int, error) {
 		// message full, send it
 		// this makes it available to the read side ASAP
 		if err := x.send(); err != nil {
-			return o, err
+			return &io.Error{o, err}
 		}
 	}
-	o += len(b)
 
-	return o, nil
+	return nil
 }
 
 // copy copies as much as it can from b into what is still available of the message data.

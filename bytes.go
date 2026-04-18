@@ -6,9 +6,7 @@ import (
 	"github.com/blitz-frost/msg"
 )
 
-type Giver interface {
-	Bytes() ([]byte, error)
-}
+type Giver func([]byte, error)
 
 type Messenger func() (Message, error)
 
@@ -17,6 +15,4 @@ type Message struct {
 	Close msg.Closer
 }
 
-type Taker interface {
-	BytesTake([]byte) error
-}
+type Taker func([]byte) error
