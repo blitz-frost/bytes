@@ -218,7 +218,7 @@ func (x *MessageReader) WriteTo(w msg.Writer) (int64, error) {
 
 func (x *MessageReader) copy(b []byte) int {
 	o := copy(b, x.b)
-	x.b = x.b[:o]
+	x.b = x.b[o:]
 	return o
 }
 
